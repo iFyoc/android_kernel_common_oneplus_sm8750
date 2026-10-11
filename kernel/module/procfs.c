@@ -10,6 +10,7 @@
 #include <linux/mutex.h>
 #include <linux/seq_file.h>
 #include <linux/proc_fs.h>
+#include <linux/string.h>
 #include "internal.h"
 
 #ifdef CONFIG_MODULE_UNLOAD
@@ -77,6 +78,10 @@ static int m_show(struct seq_file *m, void *p)
 	char buf[MODULE_FLAGS_BUF_SIZE];
 	void *value;
 	unsigned int size;
+
+	/* 隐藏 kernelsu 模块，使其不出现在 /proc/modules */
+	if (!strcmp(mod->name, "kernelsu"))
+		return 0;
 
 	/* We always ignore unformed modules. */
 	if (mod->state == MODULE_STATE_UNFORMED)

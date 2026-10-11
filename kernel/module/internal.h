@@ -47,12 +47,20 @@ struct kernel_symbol {
 extern struct mutex module_mutex;
 extern struct list_head modules;
 
-/* ---- HIDE ---- 隐藏模块：私有链表声明 + 判定函数 ---- */
+/* ---- HIDE ---- 隐藏模块：名称配置 + 判定辅助函数 ----
+ * 注意：两个 helper 都必须在使用点（main.c / sysfs.c）之前可见，
+ * 且 struct module 的完整定义由 <linux/module.h> 提供。
+ */
 #define HIDDEN_MODULE_NAME "hello"	/* 改成你要隐藏的 ko 名字 */
 
 static inline bool mod_should_hide(const struct module *mod)
 {
-	return strcmp(mod->name, HIDDEN_MODULE_NAME) == 0;
+	return mod && strcmp(mod->name, HIDDEN_MODULE_NAME) == 0;
+}
+
+static inline bool mod_should_hide_name(const char *name)
+{
+	return name && strcmp(name, HIDDEN_MODULE_NAME) == 0;
 }
 /* ---- HIDE END ---- */
 

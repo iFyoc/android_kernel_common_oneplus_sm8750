@@ -41,6 +41,7 @@
 #include <asm/cacheflush.h>
 #include <linux/set_memory.h>
 #include <asm/mmu_context.h>
+#include <asm/elf.h>			/* ---- FIX: 提供 ELF_EM 等架构相关 ELF 宏 ---- */
 #include <linux/license.h>
 #include <asm/sections.h>
 #include <linux/tracepoint.h>
@@ -2237,8 +2238,9 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 					&mod->num_trace_evals);
 #endif
 #ifdef CONFIG_TRACING
+	/* ---- FIX: 成员名应为 trace_bprintk_fmt_start，不是 trace_bprintk_fmt ---- */
 	mod->trace_bprintk_fmt_start = section_objs(info, "__trace_printk_fmt",
-					 sizeof(*mod->trace_bprintk_fmt),
+					 sizeof(*mod->trace_bprintk_fmt_start),
 					 &mod->num_trace_bprintk_fmt);
 #endif
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD

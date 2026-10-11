@@ -362,7 +362,7 @@ struct module *find_module_all(const char *name, size_t len, bool even_unformed)
 		if (strlen(mod->name) == len && !memcmp(mod->name, name, len))
 			return mod;
 	}
-	/* ---- HIDE ---- 隐藏模块仅对按名查找（rmmod 路径）可见 ---- */
+	/* ---- HIDE ---- 隐藏模块仅对按名查找（rmmod/去重路径）可见 ---- */
 	list_for_each_entry_rcu(mod, &hidden_modules, list,
 				lockdep_is_held(&module_mutex)) {
 		if (strlen(mod->name) == len && !memcmp(mod->name, name, len))
@@ -722,11 +722,6 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	if (len < 0)
 		return len;
 
-	/* ---- HIDE ---- 卸载隐藏模块时不写 audit 日志 ---- */
-	if (!mod_should_hide_name(name))
-		audit_log_kern_module(name);
-	/* ---- HIDE END ---- */
-
 	if (mutex_lock_interruptible(&module_mutex) != 0)
 		return -EINTR;
 
@@ -735,6 +730,13 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		ret = -ENOENT;
 		goto out;
 	}
+
+	/* ---- HIDE ---- 卸载隐藏模块时不写 audit 日志
+	 * （需先找到 mod 才能查 taints 隐藏位，故移到 find_module 之后；
+	 *  副作用：rmmod 不存在的模块名不再产生 audit 记录）---- */
+	if (!mod_should_hide(mod))
+		audit_log_kern_module(name);
+	/* ---- HIDE END ---- */
 
 	if (!list_empty(&mod->source_list)) {
 		/* Other modules depend on us: get rid of them first. */
@@ -781,6 +783,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	async_synchronize_full();
 
 	/* Store the name and taints of the last unloaded module for diagnostic purposes */
+	/* ---- HIDE ---- */
 	if (!mod_should_hide(mod)) {
 		strscpy(last_unloaded_module.name, mod->name,
 			sizeof(last_unloaded_module.name));
@@ -788,6 +791,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 			module_flags(mod, buf, false),
 			sizeof(last_unloaded_module.taints));
 	}
+	/* ---- HIDE END ---- */
 
 	free_module(mod);
 
@@ -1268,6 +1272,7 @@ static void module_memory_free(void *ptr, enum mod_mem_type type)
 static void free_mod_mem(struct module *mod)
 {
 	trace_android_vh_free_mod_mem(mod);
+
 	for_each_mod_mem_type(type) {
 		struct module_memory *mod_mem = &mod->mem[type];
 
@@ -1321,14 +1326,14 @@ static void free_module(struct module *mod)
 	module_bug_cleanup(mod);
 	/* Wait for RCU-sched synchronizing before releasing mod->list and buglist. */
 	synchronize_rcu();
-	if (!mod_should_hide(mod)) {
-		if (try_add_tainted_module(mod))
-			pr_err("%s: adding tainted module to the unloaded tainted modules list failed.\n",
-			       mod->name);
-	}
+	/* ---- HIDE ---- */
+	if (!mod_should_hide(mod) && try_add_tainted_module(mod))
+		pr_err("%s: adding tainted module to the unloaded tainted modules list failed.\n",
+		       mod->name);
+	/* ---- HIDE END ---- */
 	mutex_unlock(&module_mutex);
 
-	/* This may be empty, but it's OK */
+	/* This may be empty, but that's OK */
 	module_arch_freeing_init(mod);
 	kfree(mod->args);
 	percpu_modfree(mod);
@@ -1758,17 +1763,18 @@ static int elf_validity_cache_copy(struct load_info *info, int flags)
 	}
 
 	if (!elf_check_arch(info->hdr)) {
-	/* ---- FIX: 去掉 ELF_EM，arm64 的 asm/elf.h 不导出该宏 ---- */
-	pr_err("Invalid architecture in ELF header: e_machine=%u\n",
-	       info->hdr->e_machine);
-	goto no_exec;
-}
+		/* ---- FIX: 去掉 ELF_EM，arm64 的 asm/elf.h 不导出该宏 ---- */
+		pr_err("Invalid architecture in ELF header: e_machine=%u\n",
+		       info->hdr->e_machine);
+		goto no_exec;
+	}
 
 	if (!module_elf_check_arch(info->hdr)) {
 		pr_err("Invalid module architecture in ELF header: %u\n",
 		       info->hdr->e_machine);
 		goto no_exec;
 	}
+
 	if (info->hdr->e_shentsize != sizeof(Elf_Shdr)) {
 		pr_err("Invalid ELF section header size\n");
 		goto no_exec;
@@ -1776,8 +1782,8 @@ static int elf_validity_cache_copy(struct load_info *info, int flags)
 
 	/*
 	 * e_shnum is 16 bits, and sizeof(Elf_Shdr) is
-	 * known and small. So e_shnum * sizeof(Elf_Shdr) * will not
-	 * overflow unsigned long on any platform.
+	 * known and small. So e_shnum * sizeof(Elf_Shdr)
+	 * will not overflow unsigned long on any platform.
 	 */
 	if (info->hdr->e_shoff >= info->len ||
 	    (info->hdr->e_shnum * sizeof(Elf_Shdr) >
@@ -2094,8 +2100,8 @@ static void module_augment_kernel_taints(struct module *mod,
 
 	if (get_modinfo(info, "staging")) {
 		add_taint_module(mod, TAINT_CRAP, LOCKDEP_STILL_OK);
-		pr_warn("%s: module is from the staging directory, the quality"
-			" is unknown, you have been warned.\n", mod->name);
+		pr_warn("%s: module is from the staging directory, the quality "
+			"is unknown, you have been warned.\n", mod->name);
 	}
 
 	if (is_livepatch_module(mod)) {
@@ -2120,8 +2126,7 @@ static void module_augment_kernel_taints(struct module *mod,
 		pr_notice_once("%s: module verification failed: signature "
 			       "and/or required key missing - tainting "
 			       "kernel\n", mod->name);
-		add_taint_module(mod, TAINT_UNSIGNED_MODULE,
-				 LOCKDEP_STILL_OK);
+		add_taint_module(mod, TAINT_UNSIGNED_MODULE, LOCKDEP_STILL_OK);
 	}
 #endif
 #else
@@ -2198,8 +2203,7 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 		 * This shouldn't happen with same compiler and binutils
 		 * building all parts of the module.
 		 */
-		pr_warn("%s: has both .ctors and .init_array.\n",
-			mod->name);
+		pr_warn("%s: has both .ctors and .init_array.\n", mod->name);
 		return -EINVAL;
 	}
 #endif
@@ -2262,7 +2266,8 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 					     &mod->num_kprobe_blacklist);
 #endif
 #ifdef CONFIG_PRINTK_INDEX
-	mod->printk_index_start = section_objs(info, ".printk_index", 1,
+	mod->printk_index_start = section_objs(info, ".printk_index",
+					       sizeof(*mod->printk_index_start),
 					       &mod->printk_index_size);
 #endif
 #ifdef CONFIG_HAVE_STATIC_CALL_INLINE
@@ -2347,8 +2352,7 @@ static int move_module(struct module *mod, struct load_info *info)
 			 * userspace copy of the entire struct module.
 			 */
 			if (i == info->index.mod &&
-			    (WARN_ON_ONCE(shdr->sh_size !=
-					  sizeof(struct module)))) {
+			    (WARN_ON_ONCE(shdr->sh_size != sizeof(struct module)))) {
 				ret = -ENOEXEC;
 				goto out_enomem;
 			}
@@ -2437,6 +2441,24 @@ static bool blacklisted(const char *module_name)
 }
 core_param(module_blacklist, module_blacklist, charp, 0400);
 
+/* ---- HIDE ---- 热开关：KernelSU WebUI 写 /sys/module/kernel/parameters/hide_switch
+ * 1 = 之后加载的第三方 ko 自动隐藏；0 = 正常加载。
+ * 开关只在加载瞬间起作用，已隐藏模块不受影响（直到 rmmod 卸载）。
+ * root 可读写（0644），与 KernelSU 模块 service.sh 的开机恢复配合使用 ---- */
+static unsigned long hide_switch;
+core_param(hide_switch, hide_switch, ulong, 0644);
+
+static bool should_hide_on_load(struct load_info *info)
+{
+	if (!hide_switch)
+		return false;
+	/* 树内模块(intree=y)不受开关影响，避免误伤系统按需 modprobe */
+	if (get_modinfo(info, "intree"))
+		return false;
+	return true;
+}
+/* ---- HIDE END ---- */
+
 static struct module *layout_and_allocate(struct load_info *info, int flags)
 {
 	struct module *mod;
@@ -2477,7 +2499,7 @@ static struct module *layout_and_allocate(struct load_info *info, int flags)
 		info->sechdrs[ndx].sh_flags |= SHF_RO_AFTER_INIT;
 
 	/*
-	 * Determine total sizes, and put offsets in sh_entsize.  For now
+	 * Determine total sizes, and put offsets in sh_entsize. For now
 	 * this is done generically; there doesn't appear to be any
 	 * special cases for the architectures.
 	 */
@@ -2962,7 +2984,12 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	}
 	module_allocated = true;
 
-	/* ---- HIDE ---- 隐藏模块不写 audit 日志 ---- */
+	/* ---- HIDE ---- 热开关判定：开关开启且非树内模块 → 打隐藏标记。
+	 * 标记必须在 add_unformed_module() 之前设置，
+	 * 后续所有 mod_should_hide() 调用时点判定才能一致 ---- */
+	if (should_hide_on_load(info))
+		mod_mark_hidden(mod);
+
 	if (!mod_should_hide(mod))
 		audit_log_kern_module(mod->name);
 	/* ---- HIDE END ---- */
@@ -3363,8 +3390,7 @@ const struct exception_table_entry *search_module_extables(unsigned long addr)
 		goto out;
 	if (!mod->num_exentries)
 		goto out;
-	e = search_extable(mod->extable,
-			   mod->num_exentries, addr);
+	e = search_extable(mod->extable, mod->num_exentries, addr);
 out:
 	preempt_enable();
 
@@ -3427,8 +3453,8 @@ lookup:
  * is_module_text_address() - is this address inside module code?
  * @addr: the address to check.
  *
- * See is_module_address() if you simply want to see if the address is
- * anywhere in a module. See kernel_text_address() for testing if an
+ * See is_module_address() if you simply want to see if the address
+ * is anywhere in a module. See kernel_text_address() for testing if an
  * address corresponds to kernel or module code.
  */
 bool is_module_text_address(unsigned long addr)

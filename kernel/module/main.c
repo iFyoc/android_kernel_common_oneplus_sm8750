@@ -41,7 +41,6 @@
 #include <asm/cacheflush.h>
 #include <linux/set_memory.h>
 #include <asm/mmu_context.h>
-#include <asm/elf.h>			/* ---- FIX: 提供 ELF_EM 等架构相关 ELF 宏 ---- */
 #include <linux/license.h>
 #include <asm/sections.h>
 #include <linux/tracepoint.h>
@@ -1759,10 +1758,11 @@ static int elf_validity_cache_copy(struct load_info *info, int flags)
 	}
 
 	if (!elf_check_arch(info->hdr)) {
-		pr_err("Invalid architecture in ELF header: %u != %u\n",
-		       info->hdr->e_machine, ELF_EM);
-		goto no_exec;
-	}
+	/* ---- FIX: 去掉 ELF_EM，arm64 的 asm/elf.h 不导出该宏 ---- */
+	pr_err("Invalid architecture in ELF header: e_machine=%u\n",
+	       info->hdr->e_machine);
+	goto no_exec;
+}
 
 	if (!module_elf_check_arch(info->hdr)) {
 		pr_err("Invalid module architecture in ELF header: %u\n",

